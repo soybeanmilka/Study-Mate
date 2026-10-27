@@ -138,6 +138,10 @@ const TERM_LINES = [
   '# 上面这段是回放，输出原样保留',
 ];
 
+/** 一行号会变成三位数的长代码块：行号槽的宽度若被写死，第 100 行起的一个号会被折成两行，
+    整列于是比代码还高、逐行对不上代码行。这块是那条回归的靶子（不是取景主角，语言用 `text`）。 */
+const LONG_BLOCK_LINES = Array.from({ length: 120 }, (_, i) => `const v${i + 1} = ${i + 1};`);
+
 /** 一个不含空格的长标识符 + 一条长 URL：两者都能把正文列顶宽，除非正文允许在词内断行。 */
 const LONG_TOKEN = 'studymate_pane_widths_v1_override_for_narrow_canvas_scenarios_' + 'x'.repeat(24);
 const LONG_URL = 'https://example.com/docs/very/long/path/that/never/breaks/' + 'segment-'.repeat(6) + 'end';
@@ -199,6 +203,9 @@ function subjectFiles(dirName, { slug, name, touched }) {
     '::: quiz 理解 锚点：变量的比喻', ':::', '',
     '::: quiz 应用 锚点：作用域的嵌套', ':::', '',
     '::: quiz 分析 锚点：绑定的时机', ':::', '',
+    // 行号槽宽度的靶子块：120 行，号到三位数。排在最末——前面那几条读数（按语言取块、
+    // 题目标记滚进视口）量的位置都不受它影响，回归也不会因为夹具变长而误伤。
+    '```text', ...LONG_BLOCK_LINES, '```', '',
   ].join('\n');
 
   return {
@@ -489,6 +496,12 @@ const PROBE = `(() => {
             count: nums.length, ariaHidden: gutter.getAttribute('aria-hidden'),
             userSelect: getComputedStyle(gutter).userSelect,
             nums: nums.map((n) => n.textContent.trim()),
+            // 一个号只占一行：宽度写死时，三位数的号会被折成两行，高度翻倍、整列比代码还高
+            numHeights: nums.map((n) => px(n.getBoundingClientRect().height)),
+            lineH: (() => {
+              const lh = parseFloat(getComputedStyle(gutter).lineHeight);
+              return Number.isFinite(lh) ? px(lh) : null;
+            })(),
           } : null,
           rows,
           // #116：框内的解释槽。判据是「贴着它解释的那一块」——几何上四边都在 .smb-code
@@ -531,6 +544,8 @@ const PROBE = `(() => {
       return {
         js: describe(pick('js')),
         term: describe(pick('term')),
+        // 行号槽宽度的靶子：120 行、号到三位数的那一块
+        long: describe(pick('text')),
         // ::: code 那一块由**槽元素反查**它所属的块（不按语言取——语言可能与围栏撞车）
         slot: (() => {
           const el = document.querySelector('.smb-code__caption');
@@ -784,6 +799,25 @@ try {
       check(`${tag} 行的文本逐字保留（\`> \` 前缀不删、行首空白不动）`,
         !!term && JSON.stringify(term.rows.map((r) => r.text)) === JSON.stringify(TERM_LINES),
         JSON.stringify(term && term.rows.map((r) => r.text)));
+      /* 行号槽的宽度：号到三位数时也不许折行（写死 2.5ch 就是在这里坏的——一个号变两行，
+         整列比代码还高、逐行对不上）。判据是「每个号的高度 = 一行行高」＋逐行仍对齐。 */
+      const long = c115 && c115.long;
+      const numSingleLine = !!long && !!long.gutter && long.gutter.numHeights.length === LONG_BLOCK_LINES.length
+        && long.gutter.numHeights.every((h) => long.gutter.lineH && h > 0 && h <= long.gutter.lineH * 1.2);
+      check(`${tag} 行号到三位数（${LONG_BLOCK_LINES.length} 行）时一个号仍只占一行`,
+        numSingleLine,
+        JSON.stringify(long && long.gutter && {
+          last: long.gutter.nums[long.gutter.nums.length - 1], lineH: long.gutter.lineH,
+          heights: Array.from(new Set(long.gutter.numHeights)),
+        }));
+      check(`${tag} 行号到三位数时仍逐行对齐、末号是 ${LONG_BLOCK_LINES.length}`,
+        !!long && !!long.gutter && long.gutter.count === LONG_BLOCK_LINES.length
+        && long.gutter.nums[LONG_BLOCK_LINES.length - 1] === String(LONG_BLOCK_LINES.length)
+        && long.rows.length === LONG_BLOCK_LINES.length
+        && long.rows.every((r) => r.num !== null && Math.abs(r.top - r.numTop) <= 1),
+        JSON.stringify(long && long.gutter && { count: long.gutter.count,
+          last: long.gutter.nums[long.gutter.nums.length - 1],
+          offsets: long.rows.slice(0, 3).map((r) => [r.top, r.numTop]) }));
       check(`${tag} 块整宽对齐正文列、也不是贴左边一条（块外框 ${term && term.boxW} ≈ 列 ${column}）`,
         !!term && term.boxW <= column + 1 && term.boxW >= column - 1,
         `${term && term.boxW} vs ${column}`);
