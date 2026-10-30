@@ -460,6 +460,7 @@ const PROBE = `(() => {
         const codePre = block.querySelector('pre');
         const gutter = block.querySelector('.smb-code__gutter');
         const nums = gutter ? Array.from(gutter.children) : [];
+        const gutterStyle = gutter ? getComputedStyle(gutter) : null;
         const lines = codePre ? Array.from(codePre.querySelectorAll('.smb-code__line')) : [];
         const bodyBg = getComputedStyle(block).backgroundColor;
         const rows = lines.map((el, i) => {
@@ -502,6 +503,30 @@ const PROBE = `(() => {
               const lh = parseFloat(getComputedStyle(gutter).lineHeight);
               return Number.isFinite(lh) ? px(lh) : null;
             })(),
+            // 号装不装得进槽：槽的内容宽（扣掉左右内边距）与每个号**实际占的宽**。
+            // 前两条（高度、逐行对齐）断的是折行之后的后果；「一个号比槽的内容宽还宽」
+            // 才是病根——装不进槽，浏览器只能把它按字符折下去。
+            contentW: px(gutter.clientWidth - parseFloat(gutterStyle.paddingLeft)
+              - parseFloat(gutterStyle.paddingRight)),
+            // w 是号现在**真的**占多宽（折行时只覆盖最宽的那一列字——两位数的号折成
+            // 上下两行时这里只有 6.6px，比槽还窄）；singleW 是它**不折行时要占多宽**：
+            // 复制一份设成 nowrap、绝对定位脱离文档流量一次，量完就摘掉。装不装得进槽看
+            // 的是后者，前者留着当读数——只看前者会假绿。
+            boxes: nums.map((n) => {
+              const range = document.createRange();
+              range.selectNodeContents(n);
+              const probe = n.cloneNode(true);
+              probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;';
+              gutter.appendChild(probe);
+              const singleW = px(probe.getBoundingClientRect().width);
+              probe.remove();
+              return {
+                text: n.textContent.trim(),
+                h: px(n.getBoundingClientRect().height),
+                w: px(range.getBoundingClientRect().width),
+                singleW,
+              };
+            }),
           } : null,
           rows,
           // #116：框内的解释槽。判据是「贴着它解释的那一块」——几何上四边都在 .smb-code
@@ -818,6 +843,19 @@ try {
         JSON.stringify(long && long.gutter && { count: long.gutter.count,
           last: long.gutter.nums[long.gutter.nums.length - 1],
           offsets: long.rows.slice(0, 3).map((r) => [r.top, r.numTop]) }));
+      /* 第三条直接对准病根：不是「折完还对不对齐」，而是「号到底装不装得进槽」。
+         判据看的是 boxes 里的 singleW（不折行时要占多宽）——折行的号在 DOM 里只占最宽
+         那一列字（旧 CSS 实测两位数折成上下两行、range 只剩 6.6px），拿「现在占的宽」
+         去比槽宽会假绿；量「装不折行时得多宽」才真的对准「槽够不够」。 */
+      check(`${tag} 行号实际占宽不超过行号槽内容宽（装得进槽）`,
+        !!long && !!long.gutter && long.gutter.boxes.length > 0
+        && long.gutter.boxes.every((b) => b.singleW <= long.gutter.contentW + 1
+          && b.w <= long.gutter.contentW + 1),
+        JSON.stringify(long && long.gutter && {
+          contentW: long.gutter.contentW,
+          widest: long.gutter.boxes.reduce((a, b) => (b.singleW > a.singleW ? b : a),
+            { text: null, w: 0, singleW: 0 }),
+        }));
       check(`${tag} 块整宽对齐正文列、也不是贴左边一条（块外框 ${term && term.boxW} ≈ 列 ${column}）`,
         !!term && term.boxW <= column + 1 && term.boxW >= column - 1,
         `${term && term.boxW} vs ${column}`);
